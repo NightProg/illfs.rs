@@ -430,7 +430,7 @@ impl<D: InOutDevice> IllFs<D> {
         if inode.used == 0 || inode.inode_type != inode::InodeType::File {
             return Err(Error::InodeNotFound);
         }
-        self.inode_write(inode_index, &data)?;
+        self.inode_write(inode_index, data)?;
         Ok(())
     }
 

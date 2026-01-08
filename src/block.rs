@@ -22,11 +22,6 @@ pub struct Superblock {
     pub inodes_table_blocks: u64,
 }
 
-#[repr(C, packed)]
-pub struct Block {
-    pub data: [u8; BLOCK_SIZE],
-}
-
 pub struct BitMap {
     pub bits: Vec<u8>,
 }
