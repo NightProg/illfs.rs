@@ -32,11 +32,11 @@ pub trait InOutDevice {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct IllFs<D: InOutDevice> {
-    device: D,
-    superblock: block::Superblock,
-    block_bitmap: block::BitMap,
-    inode_bitmap: block::BitMap,
-    inode_table: Vec<inode::Inode>,
+    pub device: D,
+    pub superblock: block::Superblock,
+    pub block_bitmap: block::BitMap,
+    pub inode_bitmap: block::BitMap,
+    pub inode_table: Vec<inode::Inode>,
 }
 
 
