@@ -6,6 +6,7 @@ edition = "2024"
 license = "MIT"
 description = "A Library for IllFS File System Operations"
 repository = "https://github.com/NightProg/illfs.rs.git"
-
+readme = "README.md"
+keywords = ["filesystem", "illfs", "rust"]
 
 [dependencies]
