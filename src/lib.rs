@@ -1,13 +1,15 @@
 #![no_std]
 
-mod block;
-mod inode;
+pub mod block;
+pub mod inode;
 
 extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Error {
     InvalidSuperblock,
     DeviceError,
@@ -27,6 +29,8 @@ pub trait InOutDevice {
     fn close(&self) -> Result<(), Error>;
 }
 
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct IllFs<D: InOutDevice> {
     device: D,
     superblock: block::Superblock,

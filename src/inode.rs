@@ -10,7 +10,7 @@ pub enum InodeType {
     Directory,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct Inode {
     pub used: u8,
@@ -32,6 +32,8 @@ impl Default for Inode {
     }
 }
 
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -45,6 +47,8 @@ impl DirectoryEntry {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Directory {
     pub inode_count: u64,
     pub entries: Vec<DirectoryEntry>

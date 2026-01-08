@@ -5,7 +5,7 @@ pub const BLOCK_SIZE: usize = 4096; // Size of a block in bytes
 pub const ILLFS_MAGIC: u64 = 0x494C4C4653;
 pub const ILLFS_VERSION: u64 = 1;
 
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct Superblock {
     pub magic: u64,
@@ -22,6 +22,8 @@ pub struct Superblock {
     pub inodes_table_blocks: u64,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitMap {
     pub bits: Vec<u8>,
 }
