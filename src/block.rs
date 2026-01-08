@@ -29,7 +29,7 @@ pub struct BitMap {
 impl BitMap {
     pub fn new(size: usize) -> Self {
         BitMap {
-            bits: vec![0; (size + 7) / 8],
+            bits: vec![0; size.div_ceil(8)],
         }
     }
 

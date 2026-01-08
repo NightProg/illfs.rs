@@ -83,15 +83,15 @@ impl<D: InOutDevice> IllFs<D> {
         let size = device.size();
         let block_count = size / block::BLOCK_SIZE as u64;
         let inode_count = block_count / 4;
-        let block_bitmap_bsize = (block_count + 7) / 8;
-        let inode_bitmap_bsize = (inode_count + 7) / 8;
+        let block_bitmap_bsize = block_count.div_ceil(8);
+        let inode_bitmap_bsize = inode_count.div_ceil(8);
         let inode_table_bsize = inode_count * size_of::<inode::Inode>() as u64;
         let block_bitmap_start = 1;
-        let block_bitmap_blocks = (block_bitmap_bsize + block::BLOCK_SIZE as u64 - 1) / block::BLOCK_SIZE as u64;
+        let block_bitmap_blocks = block_bitmap_bsize.div_ceil(block::BLOCK_SIZE as u64);
         let inode_bitmap_start = block_bitmap_start + block_bitmap_blocks;
-        let inode_bitmap_blocks = (inode_bitmap_bsize + block::BLOCK_SIZE as u64 - 1) / block::BLOCK_SIZE as u64;
+        let inode_bitmap_blocks = inode_bitmap_bsize.div_ceil(block::BLOCK_SIZE as u64);
         let inodes_table_start = inode_bitmap_start + inode_bitmap_blocks;
-        let inodes_table_blocks = (inode_table_bsize + block::BLOCK_SIZE as u64 - 1) / block::BLOCK_SIZE as u64;
+        let inodes_table_blocks = inode_table_bsize.div_ceil(block::BLOCK_SIZE as u64);
         let superblock = block::Superblock {
             magic: block::ILLFS_MAGIC,
             version: block::ILLFS_VERSION,
