@@ -1,0 +1,11 @@
+[package]
+name = "illfs"
+version = "0.1.0"
+edition = "2024"
+
+license = "MIT"
+description = "A Library for IllFS File System Operations"
+repository = "https://github.com/NightProg/illfs.rs.git"
+
+
+[dependencies]
