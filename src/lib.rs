@@ -385,6 +385,42 @@ impl<D: InOutDevice> IllFs<D> {
         Ok(total_read)
     }
 
+    pub fn inode_read_at(&mut self, inode_idx: usize, offset: usize, buf: &mut [u8]) -> Result<usize, Error> {
+        if inode_idx >= self.inode_table.len() {
+            return Err(Error::InodeNotFound);
+        }
+        let inode = self.inode_table[inode_idx];
+        if inode.used == 0 {
+            return Err(Error::InodeNotFound);
+        }
+        if offset >= inode.size as usize {
+            return Ok(0); // Offset beyond file size
+        }
+
+        let mut total_read = 0;
+        let mut remaining = core::cmp::min(buf.len(), (inode.size as usize) - offset);
+        let mut current_offset = offset;
+
+        while remaining > 0 {
+            let block_idx = current_offset / block::BLOCK_SIZE;
+            let block_offset = current_offset % block::BLOCK_SIZE;
+            let block_index = inode.blocks[block_idx];
+
+            let mut block_buf = [0u8; block::BLOCK_SIZE];
+            self.block_read(block_index, &mut block_buf)?;
+
+            let to_read = core::cmp::min(remaining, block::BLOCK_SIZE - block_offset);
+            buf[total_read..total_read + to_read]
+                .copy_from_slice(&block_buf[block_offset..block_offset + to_read]);
+
+            total_read += to_read;
+            current_offset += to_read;
+            remaining -= to_read;
+        }
+
+        Ok(total_read)
+    }
+
     pub fn inode_size(&mut self, inode_idx: usize) -> Result<usize, Error> {
         if inode_idx >= self.inode_table.len() {
             return Err(Error::InodeNotFound);
@@ -428,6 +464,44 @@ impl<D: InOutDevice> IllFs<D> {
         Ok(total_written)
     }
 
+    pub fn inode_write_at(&mut self, inode_idx: usize, offset: usize, buf: &[u8]) -> Result<usize, Error> {
+        if inode_idx >= self.inode_table.len() {
+            return Err(Error::InodeNotFound);
+        }
+        let inode = self.inode_table[inode_idx];
+        if inode.used == 0 {
+            return Err(Error::InodeNotFound);
+        }
+        if offset >= inode.size as usize {
+            return Ok(0); // Offset beyond file size
+        }
+
+        let mut total_written = 0;
+        let mut remaining = core::cmp::min(buf.len(), (inode.size as usize) - offset);
+        let mut current_offset = offset;
+
+        while remaining > 0 {
+            let block_idx = current_offset / block::BLOCK_SIZE;
+            let block_offset = current_offset % block::BLOCK_SIZE;
+            let block_index = inode.blocks[block_idx];
+
+            let mut block_buf = [0u8; block::BLOCK_SIZE];
+            self.block_read(block_index, &mut block_buf)?;
+
+            let to_write = core::cmp::min(remaining, block::BLOCK_SIZE - block_offset);
+            block_buf[block_offset..block_offset + to_write]
+                .copy_from_slice(&buf[total_written..total_written + to_write]);
+
+            self.block_write(block_index, &block_buf)?;
+
+            total_written += to_write;
+            current_offset += to_write;
+            remaining -= to_write;
+        }
+
+        Ok(total_written)
+    }
+
     pub fn read_file(&mut self,path: &str) -> Result<Vec<u8>, Error> {
         let inode_index = self.resolve_path(path)?;
         let inode = self.inode_table[inode_index];
@@ -436,6 +510,17 @@ impl<D: InOutDevice> IllFs<D> {
         }
         let mut file_buf = vec![0u8; inode.size as usize];
         self.inode_read(inode_index, &mut file_buf)?;
+        Ok(file_buf)
+    }
+
+    pub fn read_file_at(&mut self, path: &str, offset: usize, size: usize) -> Result<Vec<u8>, Error> {
+        let inode_index = self.resolve_path(path)?;
+        let inode = self.inode_table[inode_index];
+        if inode.used == 0 || inode.inode_type != inode::InodeType::File {
+            return Err(Error::InodeNotFound);
+        }
+        let mut file_buf = vec![0u8; size];
+        self.inode_read_at(inode_index, offset, &mut file_buf)?;
         Ok(file_buf)
     }
 
@@ -455,6 +540,16 @@ impl<D: InOutDevice> IllFs<D> {
             return Err(Error::InodeNotFound);
         }
         self.inode_write(inode_index, data)?;
+        Ok(())
+    }
+
+    pub fn write_file_at(&mut self, path: &str, offset: usize, data: &[u8]) -> Result<(), Error> {
+        let inode_index = self.resolve_path(path)?;
+        let inode = self.inode_table[inode_index];
+        if inode.used == 0 || inode.inode_type != inode::InodeType::File {
+            return Err(Error::InodeNotFound);
+        }
+        self.inode_write_at(inode_index, offset, data)?;
         Ok(())
     }
 
