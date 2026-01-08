@@ -385,6 +385,17 @@ impl<D: InOutDevice> IllFs<D> {
         Ok(total_read)
     }
 
+    pub fn inode_size(&mut self, inode_idx: usize) -> Result<usize, Error> {
+        if inode_idx >= self.inode_table.len() {
+            return Err(Error::InodeNotFound);
+        }
+        let inode = self.inode_table[inode_idx];
+        if inode.used == 0 {
+            return Err(Error::InodeNotFound);
+        }
+        Ok(inode.size as usize)
+    }
+
     pub fn inode_write(&mut self, inode_idx: usize, buf: &[u8]) -> Result<usize, Error> {
         if inode_idx >= self.inode_table.len() {
             return Err(Error::InodeNotFound);
@@ -426,6 +437,15 @@ impl<D: InOutDevice> IllFs<D> {
         let mut file_buf = vec![0u8; inode.size as usize];
         self.inode_read(inode_index, &mut file_buf)?;
         Ok(file_buf)
+    }
+
+    pub fn size_file(&mut self, path: &str) -> Result<usize, Error> {
+        let inode_index = self.resolve_path(path)?;
+        let inode = self.inode_table[inode_index];
+        if inode.used == 0 || inode.inode_type != inode::InodeType::File {
+            return Err(Error::InodeNotFound);
+        }
+        Ok(inode.size as usize)
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), Error> {
