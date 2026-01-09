@@ -63,16 +63,17 @@ impl<D: InOutDevice> IllFs<D> {
         let inode_bitmap = block::BitMap { bits: inode_bitmap_buf };
 
         // Load inode table
-        let mut inode_table = Vec::with_capacity(superblock.inode_count as usize);
-        for i in 0..superblock.inode_count {
-            let mut inode_buf = [0u8; size_of::<inode::Inode>()];
-            device.read(
-                superblock.inodes_table_start * block::BLOCK_SIZE as u64 + i * size_of::<inode::Inode>() as u64,
-                &mut inode_buf,
-            )?;
-            let inode: inode::Inode = unsafe { core::ptr::read(inode_buf.as_ptr() as *const _) };
-            inode_table.push(inode);
-        }
+        let inode_table_size = (superblock.inodes_table_blocks as usize) * block::BLOCK_SIZE / size_of::<inode::Inode>();
+        let mut inode_table = vec![inode::Inode::default(); inode_table_size];
+        device.read(
+            superblock.inodes_table_start * block::BLOCK_SIZE as u64,
+            unsafe {
+                core::slice::from_raw_parts_mut(
+                    inode_table.as_mut_ptr() as *mut u8,
+                    inode_table_size * size_of::<inode::Inode>(),
+                )
+            },
+        )?;
 
         Ok(IllFs {
             device,
@@ -129,7 +130,7 @@ impl<D: InOutDevice> IllFs<D> {
             inode_bitmap_start * block::BLOCK_SIZE as u64,
             inode_bitmap_buf,
         )?;
-        let mut inode_table: Vec<inode::Inode> = Vec::with_capacity(superblock.inode_count as usize);
+        let mut inode_table: Vec<inode::Inode> = vec![inode::Inode::default(); inode_count as usize];
         inode_table[1].used = 1;
         inode_table[1].inode_type = inode::InodeType::Directory;
         inode_table[1].size = size_of::<u64>() as u64;

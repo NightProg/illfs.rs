@@ -2,11 +2,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub const BLOCK_SIZE: usize = 4096; // Size of a block in bytes
-pub const ILLFS_MAGIC: u64 = 0x494C4C4653;
+pub const ILLFS_MAGIC: u64 = 0x494C4C4653000000;
 pub const ILLFS_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct Superblock {
     pub magic: u64,
     pub version: u64,
