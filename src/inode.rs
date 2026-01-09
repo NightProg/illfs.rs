@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-pub const MAX_BLOCKS_PER_INODE: usize = 12;
+pub const MAX_BLOCKS_PER_INODE: u64 = 12;
 pub const MAX_STRING_SIZE: usize = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub struct Inode {
     pub inode_type: InodeType,
     pub size: u64,
     pub block_count: u64,
-    pub blocks: [u64; MAX_BLOCKS_PER_INODE],
+    pub blocks: [u64; MAX_BLOCKS_PER_INODE as usize],
 }
 
 impl Default for Inode {
@@ -27,7 +27,7 @@ impl Default for Inode {
             inode_type: InodeType::File,
             size: 0,
             block_count: 0,
-            blocks: [0; MAX_BLOCKS_PER_INODE],
+            blocks: [0; MAX_BLOCKS_PER_INODE as usize],
         }
     }
 }
