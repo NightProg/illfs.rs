@@ -53,3 +53,5 @@ impl BitMap {
         (self.bits[byte_index] & (1 << bit_index)) != 0
     }
 }
+
+

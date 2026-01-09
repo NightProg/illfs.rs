@@ -224,13 +224,36 @@ impl<D: InOutDevice> IllFs<D> {
         if inode.used == 0 || inode.inode_type != inode::InodeType::Directory {
             return Err(Error::NotADirectory);
         }
-        let mut dir_buf = vec![0u8; inode.size as usize];
-        for i in 0..inode.block_count {
-            let block_index = inode.blocks[i as usize];
-            let offset = i as usize * block::BLOCK_SIZE;
-            self.block_read(block_index, &mut dir_buf[offset..offset + block::BLOCK_SIZE])?;
+        let mut dir_buf = vec![0u8; block::BLOCK_SIZE];
+        self.block_read(inode.blocks[0], &mut dir_buf)?;
+
+        dir_buf.truncate(inode.size as usize);
+
+        let inode_count = u64::from_le_bytes(dir_buf[..8].try_into().unwrap());
+
+        let mut entries: Vec<MaybeUninit<inode::DirectoryEntry>> = Vec::with_capacity(inode_count as usize);
+        let offset = size_of::<u64>();
+
+        unsafe {
+            entries.set_len(inode_count as usize);
         }
-        let dir: inode::Directory = unsafe { core::ptr::read(dir_buf.as_ptr() as *const _) };
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                dir_buf[offset..].as_ptr(),
+                entries.as_mut_ptr() as *mut u8,
+                (inode_count as usize) * size_of::<inode::DirectoryEntry>(),
+            );
+        }
+
+        let dir = inode::Directory {
+            inode_count,
+            entries: entries
+                .iter()
+                .map(|entry| unsafe { entry.assume_init() })
+                .collect(),
+        };
+
         Ok(dir)
     }
 

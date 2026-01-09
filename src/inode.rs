@@ -4,10 +4,10 @@ pub const MAX_BLOCKS_PER_INODE: usize = 12;
 pub const MAX_STRING_SIZE: usize = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(i32)]
 pub enum InodeType {
-    File,
-    Directory,
+    File = 0,
+    Directory = 1,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
