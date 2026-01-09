@@ -11,7 +11,7 @@ pub enum InodeType {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct Inode {
     pub used: u8,
     pub inode_type: InodeType,
@@ -34,7 +34,7 @@ impl Default for Inode {
 
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct DirectoryEntry {
     pub inode: u64,
     pub name: [u8; MAX_STRING_SIZE],

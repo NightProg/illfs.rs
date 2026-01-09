@@ -7,7 +7,7 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-
+use core::mem::MaybeUninit;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Error {
@@ -45,9 +45,12 @@ impl<D: InOutDevice> IllFs<D> {
     pub fn mount(mut device: D) -> Result<Self, Error> {
         // Read and validate superblock
         let mut superblock_buf = [0u8; size_of::<block::Superblock>()];
-        device.read(0, &mut superblock_buf)?;
-        let superblock: block::Superblock = unsafe { core::ptr::read(superblock_buf.as_ptr() as *const _) };
 
+        device.read(0, &mut superblock_buf)?;
+
+        let superblock: block::Superblock = unsafe {
+            core::ptr::read_unaligned(superblock_buf.as_ptr() as *const block::Superblock)
+        };
         if superblock.magic != block::ILLFS_MAGIC || superblock.version != block::ILLFS_VERSION {
             return Err(Error::InvalidSuperblock);
         }
@@ -63,24 +66,37 @@ impl<D: InOutDevice> IllFs<D> {
         let inode_bitmap = block::BitMap { bits: inode_bitmap_buf };
 
         // Load inode table
-        let inode_table_size = (superblock.inodes_table_blocks as usize) * block::BLOCK_SIZE / size_of::<inode::Inode>();
-        let mut inode_table = vec![inode::Inode::default(); inode_table_size];
-        device.read(
-            superblock.inodes_table_start * block::BLOCK_SIZE as u64,
-            unsafe {
-                core::slice::from_raw_parts_mut(
-                    inode_table.as_mut_ptr() as *mut u8,
-                    inode_table_size * size_of::<inode::Inode>(),
-                )
-            },
-        )?;
+        let inode_table_size =
+            superblock.inodes_table_blocks as usize * block::BLOCK_SIZE / size_of::<inode::Inode>();
+
+
+        let mut inode_table: Vec<MaybeUninit<inode::Inode>> = Vec::with_capacity(inode_table_size);
+        unsafe {
+            inode_table.set_len(inode_table_size);
+        }
+
+        let bytes = inode_table_size * size_of::<inode::Inode>();
+        let offset = superblock.inodes_table_start  * block::BLOCK_SIZE as u64;
+
+        let buf = unsafe {
+            core::slice::from_raw_parts_mut(
+                inode_table.as_mut_ptr() as *mut u8,
+                bytes,
+            )
+        };
+
+        device.read(offset, buf)?;
+
 
         Ok(IllFs {
             device,
             superblock,
             block_bitmap,
             inode_bitmap,
-            inode_table,
+            inode_table: inode_table
+                .iter()
+                .map(|inode| unsafe { inode.assume_init() })
+                .collect(),
         })
     }
 
