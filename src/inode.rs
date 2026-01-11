@@ -55,12 +55,13 @@ pub struct Directory {
 }
 
 impl Directory {
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const Directory as *const u8,
-                size_of::<u64>() + self.entries.len() * size_of::<DirectoryEntry>(),
-            )
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.inode_count.to_le_bytes());
+        for entry in &self.entries {
+            bytes.extend_from_slice(&entry.inode.to_le_bytes());
+            bytes.extend_from_slice(&entry.name);
         }
+        bytes
     }
 }

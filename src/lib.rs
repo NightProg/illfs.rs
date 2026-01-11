@@ -5,9 +5,10 @@ pub mod inode;
 
 extern crate alloc;
 
-use alloc::vec;
+use alloc::{format, vec};
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
+
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Error {
@@ -56,9 +57,24 @@ impl<D: InOutDevice> IllFs<D> {
         }
 
         // Load block bitmap
-        let mut block_bitmap_buf = vec![0u8; (superblock.blocks_bitmap_blocks as usize) * block::BLOCK_SIZE];
-        device.read(superblock.blocks_bitmap_start * block::BLOCK_SIZE as u64, &mut block_bitmap_buf)?;
-        let block_bitmap = block::BitMap { bits: block_bitmap_buf };
+        let disk_bytes =
+            superblock.blocks_bitmap_blocks as usize * block::BLOCK_SIZE;
+
+        let mut disk_buf = vec![0u8; disk_bytes];
+        device.read(
+            superblock.blocks_bitmap_start * block::BLOCK_SIZE as u64,
+            &mut disk_buf,
+        )?;
+
+        let block_count = superblock.block_count as usize;
+
+        let bitmap_bytes = block_count.div_ceil(8);
+
+        disk_buf.truncate(bitmap_bytes);
+
+        let block_bitmap = block::BitMap {
+            bits: disk_buf,
+        };
 
         // Load inode bitmap
         let mut inode_bitmap_buf = vec![0u8; (superblock.inode_bitmap_blocks as usize) * block::BLOCK_SIZE];
@@ -101,7 +117,13 @@ impl<D: InOutDevice> IllFs<D> {
     }
 
     pub fn make_filesystem(mut device: D) -> Result<Self, Error> {
+        // zero out the device
+
         let size = device.size();
+        for offset in (0..size).step_by(block::BLOCK_SIZE) {
+            let zero_block = [0u8; block::BLOCK_SIZE];
+            device.write(offset, &zero_block)?;
+        }
         let block_count = size / block::BLOCK_SIZE as u64;
         let inode_count = block_count / 4;
         let block_bitmap_bsize = block_count.div_ceil(8);
@@ -178,25 +200,75 @@ impl<D: InOutDevice> IllFs<D> {
     }
 
     pub fn sync(&mut self) -> Result<(), Error> {
-        let block_bitmap_buf: &[u8] = &self.block_bitmap.bits;
-        self.device.write(
-            self.superblock.blocks_bitmap_start * block::BLOCK_SIZE as u64,
-            block_bitmap_buf,
-        )?;
-        let inode_bitmap_buf: &[u8] = &self.inode_bitmap.bits;
-        self.device.write(
-            self.superblock.inode_bitmap_start * block::BLOCK_SIZE as u64,
-            inode_bitmap_buf,
-        )?;
-        self.device.write(
-            self.superblock.inodes_table_start * block::BLOCK_SIZE as u64,
-            unsafe {
-                core::slice::from_raw_parts(
-                    self.inode_table.as_ptr() as *const u8,
-                    self.inode_table.len() * size_of::<inode::Inode>(),
-                )
-            },
-        )?;
+        // write back superblock, bitmaps, and inode table
+        let superblock_buf: &[u8] = unsafe {
+            core::slice::from_raw_parts(
+                &self.superblock as *const block::Superblock as *const u8,
+                size_of::<block::Superblock>(),
+            )
+        };
+        self.device.write(0, superblock_buf)?;
+        let bitmap_bytes = self.block_bitmap.bits.len();
+        let bitmap_blocks = self.superblock.blocks_bitmap_blocks as usize;
+        let total_bytes = bitmap_blocks * block::BLOCK_SIZE;
+
+        let mut buf = vec![0u8; total_bytes];
+        buf[..bitmap_bytes].copy_from_slice(&self.block_bitmap.bits);
+
+        for i in 0..bitmap_blocks {
+            let offset =
+                self.superblock.blocks_bitmap_start * block::BLOCK_SIZE as u64
+                    + (i as u64 * block::BLOCK_SIZE as u64);
+
+            let start = i * block::BLOCK_SIZE;
+            let end = start + block::BLOCK_SIZE;
+
+            self.device.write(offset, &buf[start..end])?;
+        }
+
+        let bitmap_bytes = self.inode_bitmap.bits.len();
+        let bitmap_blocks = self.superblock.inode_bitmap_blocks as usize;
+        let total_bytes = bitmap_blocks * block::BLOCK_SIZE;
+
+        let mut buf = vec![0u8; total_bytes];
+        buf[..bitmap_bytes].copy_from_slice(&self.inode_bitmap.bits);
+
+        for i in 0..bitmap_blocks {
+            let offset =
+                self.superblock.inode_bitmap_start * block::BLOCK_SIZE as u64
+                    + (i as u64 * block::BLOCK_SIZE as u64);
+
+            let start = i * block::BLOCK_SIZE;
+            let end = start + block::BLOCK_SIZE;
+
+            self.device.write(offset, &buf[start..end])?;
+        }
+
+        let inode_table_bytes = self.inode_table.len() * size_of::<inode::Inode>();
+        let inode_table_blocks = self.superblock.inodes_table_blocks as usize;
+        let total_bytes = inode_table_blocks * block::BLOCK_SIZE;
+
+        let mut buf = vec![0u8; total_bytes];
+
+        unsafe {
+            let src = core::slice::from_raw_parts(
+                self.inode_table.as_ptr() as *const u8,
+                inode_table_bytes,
+            );
+            buf[..inode_table_bytes].copy_from_slice(src);
+        }
+
+        for i in 0..inode_table_blocks {
+            let offset =
+                self.superblock.inodes_table_start * block::BLOCK_SIZE as u64
+                    + (i as u64 * block::BLOCK_SIZE as u64);
+
+            let start = i * block::BLOCK_SIZE;
+            let end = start + block::BLOCK_SIZE;
+
+            self.device.write(offset, &buf[start..end])?;
+        }
+
         Ok(())
     }
 
@@ -257,6 +329,35 @@ impl<D: InOutDevice> IllFs<D> {
         Ok(dir)
     }
 
+    pub fn set_directory(&mut self, inode_index: usize, dir: &inode::Directory) -> Result<(), Error> {
+        if inode_index >= self.inode_table.len() {
+            return Err(Error::InodeNotFound);
+        }
+        if self.inode_table[inode_index].used == 0 || self.inode_table[inode_index].inode_type != inode::InodeType::Directory {
+            return Err(Error::NotADirectory);
+        }
+
+        let dir_size = size_of::<u64>() + dir.entries.len() * size_of::<inode::DirectoryEntry>();
+        let mut dir_buf = vec![0u8; block::BLOCK_SIZE];
+
+        let inode_count_bytes = dir.inode_count.to_le_bytes();
+        dir_buf[..size_of::<u64>()].copy_from_slice(&inode_count_bytes);
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                dir.entries.as_ptr() as *const u8,
+                dir_buf[size_of::<u64>()..].as_mut_ptr(),
+                dir.entries.len() * size_of::<inode::DirectoryEntry>(),
+            );
+        }
+
+        self.block_write(self.inode_table[inode_index].blocks[0], &dir_buf)?;
+
+        self.inode_table[inode_index].size = dir_size as u64;
+
+        Ok(())
+    }
+
     pub fn resolve_path(&mut self, path: &str) -> Result<usize, Error> {
         let mut current_inode_index = 1; // Start from root directory
         let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -293,7 +394,7 @@ impl<D: InOutDevice> IllFs<D> {
     }
 
     pub fn allocate_inode(&mut self) -> Result<usize, Error> {
-        for i in 0..self.superblock.inode_count as usize {
+        for i in 2..self.superblock.inode_count as usize {
             if !self.inode_bitmap.get(i) {
                 self.inode_bitmap.set(i, true);
                 return Ok(i);
@@ -303,90 +404,142 @@ impl<D: InOutDevice> IllFs<D> {
     }
 
     pub fn create_file(&mut self, path: &str) -> Result<usize, Error> {
+        if !path.starts_with('/') {
+            return Err(Error::Other("Path must start with /"));
+        }
+
         let parent_path = if let Some(pos) = path.rfind('/') {
-            &path[..pos]
+            if pos == 0 {
+                "/"
+            } else {
+                &path[..pos]
+            }
         } else {
             return Err(Error::Other("Invalid path"));
         };
+
         let file_name = if let Some(pos) = path.rfind('/') {
             &path[pos + 1..]
         } else {
             path
         };
 
+        if file_name.is_empty() {
+            return Err(Error::Other("File name cannot be empty"));
+        }
+        if file_name.len() >= inode::MAX_STRING_SIZE {
+            return Err(Error::Other("File name too long"));
+        }
+
         let parent_inode_index = self.resolve_path(parent_path)?;
 
         if self.inode_table[parent_inode_index].inode_type != inode::InodeType::Directory {
             return Err(Error::NotADirectory);
         }
 
-        let new_inode_index = self.allocate_inode()?;
-        let new_inode = &mut self.inode_table[new_inode_index];
-        new_inode.used = 1;
-        new_inode.inode_type = inode::InodeType::File;
-        new_inode.size = 0;
-        new_inode.block_count = 0;
+        let mut parent_dir = self.directory_open(parent_inode_index)?;
 
-        let mut dir = self.directory_open(parent_inode_index)?;
+        for entry in parent_dir.entries.iter() {
+            if entry.name_as_str() == file_name {
+                return Err(Error::FileExists);
+            }
+        }
+
+
+        let new_inode_index = self.allocate_inode()?;
+
+        self.inode_table[new_inode_index].used = 1;
+        self.inode_table[new_inode_index].inode_type = inode::InodeType::File;
+        self.inode_table[new_inode_index].size = 0;
+        self.inode_table[new_inode_index].block_count = 0;
+
         let mut entry = inode::DirectoryEntry {
             inode: new_inode_index as u64,
             name: [0; inode::MAX_STRING_SIZE],
         };
         let name_bytes = file_name.as_bytes();
-        if name_bytes.len() >= inode::MAX_STRING_SIZE {
-            return Err(Error::Other("File name too long"));
-        }
         entry.name[..name_bytes.len()].copy_from_slice(name_bytes);
-        dir.entries.push(entry);
+
         self.inode_table[parent_inode_index].size += size_of::<inode::DirectoryEntry>() as u64;
-        self.inode_table[parent_inode_index].block_count += 1;
+
+        parent_dir.entries.push(entry);
+        parent_dir.inode_count += 1;
+
+        self.set_directory(parent_inode_index, &parent_dir)?;
 
         Ok(new_inode_index)
     }
 
     pub fn create_directory(&mut self, path: &str) -> Result<usize, Error> {
+        if !path.starts_with('/') {
+            return Err(Error::Other("Path must start with /"));
+        }
+
         let parent_path = if let Some(pos) = path.rfind('/') {
-            &path[..pos]
+            if pos == 0 {
+                "/"
+            } else {
+                &path[..pos]
+            }
         } else {
             return Err(Error::Other("Invalid path"));
         };
+
         let dir_name = if let Some(pos) = path.rfind('/') {
             &path[pos + 1..]
         } else {
             path
         };
 
+        if dir_name.is_empty() {
+            return Err(Error::Other("Directory name cannot be empty"));
+        }
+        if dir_name.len() >= inode::MAX_STRING_SIZE {
+            return Err(Error::Other("Directory name too long"));
+        }
+
         let parent_inode_index = self.resolve_path(parent_path)?;
 
         if self.inode_table[parent_inode_index].inode_type != inode::InodeType::Directory {
             return Err(Error::NotADirectory);
         }
+
+        let mut parent_dir = self.directory_open(parent_inode_index)?;
+
+        for entry in parent_dir.entries.iter() {
+            if entry.name_as_str() == dir_name {
+                return Err(Error::DirectoryExists);
+            }
+        }
+
         let new_block = self.allocate_block()?;
+
         let new_inode_index = self.allocate_inode()?;
-        let new_inode = &mut self.inode_table[new_inode_index];
-        new_inode.used = 1;
-        new_inode.inode_type = inode::InodeType::Directory;
-        new_inode.size = size_of::<u64>() as u64;
-        new_inode.block_count = 1;
-        new_inode.blocks[0] = new_block;
 
-        let root_dir_buf = 0u64.to_le_bytes();
-        self.block_write(new_block, &root_dir_buf)?;
+        self.inode_table[new_inode_index].used = 1;
+        self.inode_table[new_inode_index].inode_type = inode::InodeType::Directory;
+        self.inode_table[new_inode_index].size = size_of::<u64>() as u64;
+        self.inode_table[new_inode_index].block_count = 1;
+        self.inode_table[new_inode_index].blocks[0] = new_block;
 
+        let empty_dir_count = 0u64.to_le_bytes();
+        let mut new_dir_buf = vec![0u8; block::BLOCK_SIZE];
+        new_dir_buf[..size_of::<u64>()].copy_from_slice(&empty_dir_count);
+        self.block_write(new_block, &new_dir_buf)?;
 
-        let mut dir = self.directory_open(parent_inode_index)?;
         let mut entry = inode::DirectoryEntry {
             inode: new_inode_index as u64,
             name: [0; inode::MAX_STRING_SIZE],
         };
         let name_bytes = dir_name.as_bytes();
-        if name_bytes.len() >= inode::MAX_STRING_SIZE {
-            return Err(Error::Other("Directory name too long"));
-        }
         entry.name[..name_bytes.len()].copy_from_slice(name_bytes);
-        dir.entries.push(entry);
+
+        parent_dir.entries.push(entry);
+        parent_dir.inode_count += 1;
+
         self.inode_table[parent_inode_index].size += size_of::<inode::DirectoryEntry>() as u64;
-        self.inode_table[parent_inode_index].block_count += 1;
+
+        self.set_directory(parent_inode_index, &parent_dir)?;
 
         Ok(new_inode_index)
     }
@@ -449,9 +602,6 @@ impl<D: InOutDevice> IllFs<D> {
         if inode.used == 0 {
             return Err(Error::InodeNotFound);
         }
-        if offset >= inode.size as usize {
-            return Ok(0); // Offset beyond file size
-        }
         let mut total_written = 0;
         while total_written < buf.len() {
             let block_idx = (offset + total_written) / block::BLOCK_SIZE;
@@ -509,6 +659,140 @@ impl<D: InOutDevice> IllFs<D> {
         }
         self.inode_write_at(inode_index, offset, data)?;
         Ok(())
+    }
+
+    pub fn delete_file(&mut self, path: &str) -> Result<(), Error> {
+        let parent_path = if let Some(pos) = path.rfind('/') {
+            &path[..pos]
+        } else {
+            return Err(Error::Other("Invalid path"));
+        };
+        let file_name = if let Some(pos) = path.rfind('/') {
+            &path[pos + 1..]
+        } else {
+            path
+        };
+
+        let parent_inode_index = self.resolve_path(parent_path)?;
+
+        if self.inode_table[parent_inode_index].inode_type != inode::InodeType::Directory {
+            return Err(Error::NotADirectory);
+        }
+
+        let mut dir = self.directory_open(parent_inode_index)?;
+        let mut file_inode_index = None;
+
+        for (i, entry) in dir.entries.iter().enumerate() {
+            if entry.name_as_str() == file_name {
+                file_inode_index = Some(entry.inode as usize);
+                dir.entries.remove(i);
+                break;
+            }
+        }
+
+        let file_inode_index = match file_inode_index {
+            Some(idx) => idx,
+            None => return Err(Error::InodeNotFound),
+        };
+
+        self.inode_table[file_inode_index].used = 0;
+        for i in 0..self.inode_table[file_inode_index].block_count as usize {
+            let block_index = self.inode_table[file_inode_index].blocks[i] as usize;
+            self.block_bitmap.set(block_index, false);
+        }
+        self.inode_bitmap.set(file_inode_index, false);
+
+        dir.inode_count -= 1;
+        self.inode_table[parent_inode_index].size -= size_of::<inode::DirectoryEntry>() as u64;
+
+
+
+        self.set_directory(parent_inode_index, &dir)?;
+
+        Ok(())
+    }
+
+    pub fn delete_dir_entry(&mut self, path: &str) -> Result<(), Error> {
+        let parent_path = if let Some(pos) = path.rfind('/') {
+            &path[..pos]
+        } else {
+            return Err(Error::Other("Invalid path"));
+        };
+        let dir_name = if let Some(pos) = path.rfind('/') {
+            &path[pos + 1..]
+        } else {
+            path
+        };
+
+        let parent_inode_index = self.resolve_path(parent_path)?;
+
+        if self.inode_table[parent_inode_index].inode_type != inode::InodeType::Directory {
+            return Err(Error::NotADirectory);
+        }
+
+        let mut dir = self.directory_open(parent_inode_index)?;
+        let mut dir_inode_index = None;
+
+        for (i, entry) in dir.entries.iter().enumerate() {
+            if entry.name_as_str() == dir_name {
+                dir_inode_index = Some(entry.inode as usize);
+                dir.entries.remove(i);
+                break;
+            }
+        }
+
+        let dir_inode_index = match dir_inode_index {
+            Some(idx) => idx,
+            None => return Err(Error::InodeNotFound),
+        };
+
+        self.inode_table[dir_inode_index].used = 0;
+        for i in 0..self.inode_table[dir_inode_index].block_count as usize {
+            let block_index = self.inode_table[dir_inode_index].blocks[i] as usize;
+            self.block_bitmap.set(block_index, false);
+        }
+        self.inode_bitmap.set(dir_inode_index, false);
+
+        dir.inode_count -= 1;
+        self.inode_table[parent_inode_index].size -= size_of::<inode::DirectoryEntry>() as u64;
+
+        self.set_directory(parent_inode_index, &dir)?;
+
+        Ok(())
+    }
+
+    pub fn delete(&mut self, path: &str) -> Result<(), Error> {
+        let inode_index = self.resolve_path(path)?;
+        let inode = self.inode_table[inode_index];
+        if inode.used == 0 {
+            return Err(Error::InodeNotFound);
+        }
+
+        match inode.inode_type {
+            inode::InodeType::File => self.delete_file(path),
+            inode::InodeType::Directory => self.delete_directory(path),
+        }
+    }
+
+    pub fn delete_directory(&mut self, path: &str) -> Result<(), Error> {
+        let inode_index = self.resolve_path(path)?;
+        let inode = self.inode_table[inode_index];
+        if inode.used == 0 || inode.inode_type != inode::InodeType::Directory {
+            return Err(Error::InodeNotFound);
+        }
+
+        let dir = self.directory_open(inode_index)?;
+        if !dir.entries.is_empty() {
+            return Err(Error::Other("Directory not empty"));
+        }
+        for i in dir.entries {
+            let entry_path = format!("{}/{}", path, i.name_as_str());
+            self.delete(&entry_path)?;
+
+        }
+
+        self.delete_dir_entry(path)
+
     }
 
     pub fn unmount(mut self) -> Result<(), Error> {
